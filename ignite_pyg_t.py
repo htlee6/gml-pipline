@@ -1,21 +1,31 @@
 import argparse
 from ast import arg
+from cgi import test
 
 import ignite.distributed as idist
 from numpy import dtype
+from setuptools import setup
 import torch
-from ignite.engine import Engine, Events
+from ignite.engine import Engine, Events, create_supervised_evaluator
+from ignite.metrics import Accuracy
+from ignite.contrib.metrics import ROC_AUC
 from torch.nn import NLLLoss
 from torch.optim import SGD, Adam
+from ignite.utils import setup_logger
 from torch.utils.data import Dataset
+import torch.nn.functional as F
 
 # rom torch_geometric.datasets import Planetoid
 import ogb
-from ogb.graphproppred import PygGraphPropPredDataset
+from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
+
+from time import time
+
+from tqdm import tqdm
 
 # torch.set_default_dtype(torch.float64)
 
-dataset_outside = PygGraphPropPredDataset(name = "ogbg-molhiv", root = 'datas/')
+dataset_outside = PygGraphPropPredDataset(name="ogbg-molhiv")
 data_0_outside = dataset_outside[0]
 
 # Use Collater() as `collate_fn`, code from pyg source
@@ -77,7 +87,6 @@ def training(rank, config):
     )
 
     device = idist.device()
-
     # Data preparation:
     # dataset = RndDataset(nb_samples=config["nb_samples"])
     # new_dataset = torch.utils.data.Dataset(dataset)
@@ -104,6 +113,7 @@ def training(rank, config):
         model = GNN(gnn_type = 'gcn', num_tasks = dataset.num_tasks, num_layer = config['num_layer'], emb_dim = config['emb_dim'], drop_ratio = config['drop_ratio'], virtual_node = True).to(device)
     else:
         raise ValueError('Invalid GNN type')
+   
    
     # print("Preparing Model")
     model = idist.auto_model(model)
@@ -140,7 +150,7 @@ def training(rank, config):
     def _train(engine, foo):
         model.train()
         for step, batch in enumerate(train_loader):
-            # if step % 100 == 0:
+            # if step % 3 == 0:
             #     print("current step " + str(step))
             batch = batch.to(device)
 
@@ -154,6 +164,9 @@ def training(rank, config):
                 loss = criterion(pred.to(torch.float32)[is_labeled], batch.y.to(torch.float32)[is_labeled])
                 loss.backward()
                 optimizer.step()
+    
+    # torch.no_grad()
+    # return_dict = {"y_pred": model(dataset[split_idx['test']]), "y": dataset[split_idx['test']].y}
 
     # Running the _train_step function on whole batch_data iterable only once
     # trainer = Engine(_train_step)
@@ -161,6 +174,27 @@ def training(rank, config):
     # print("About to Start")
     trainer = Engine(_train)
 
+    metrics_dict = {"ROC_AUC": ROC_AUC(), "Acc": Accuracy()}
+    # metrics_dict = {"Acc": Accuracy()}
+    def graph_prepare_batch(batch, **kwargs):
+        class Features():
+            def __init__(self):
+                pass
+        f = Features()
+        f.x, f.edge_index, f.edge_attr, f.batch, y = batch.x, batch.edge_index, batch.edge_attr, batch.batch, batch.y
+        return f, y
+    
+    def custom_output_transform(x, y, y_pred):
+        return ((y_pred > 0).int(), y)
+
+    evaluator = create_supervised_evaluator(model=model, metrics=metrics_dict, prepare_batch=graph_prepare_batch, output_transform=custom_output_transform)
+    evaluator.logger = setup_logger("evaluator")
+
+    pbar = tqdm(initial=0, leave=False, total=len(train_loader), desc=f"Iteration - loss: {0: .2f}")
+    @trainer.on(Events.ITERATION_COMPLETED(every=log_interval))
+    def log_progress_bar(engine):
+        pbar.update(log_interval)
+    
     # Add a logger
     @trainer.on(Events.ITERATION_COMPLETED(every=100))
     def log_training(engine):
@@ -184,15 +218,31 @@ def training(rank, config):
         i = engine.state.iteration
         print(f"Epoch {e}/{n} : {i} - batch loss: {batch_loss}, lr: {lr}")
 
+    @trainer.on(Events.COMPLETED)
+    def eval_testloader(engine):
 
-    trainer.run(train_loader, max_epochs=10)
+        try:
+            evaluator.run(test_loader)
+        except:
+            print(evaluator.state.output)
+        
+        metrics = evaluator.state.metrics
+        if 'Acc' in metrics.keys():
+            avg_acc = metrics['Acc']
+            tqdm.write('Average Acc: ' + str(avg_acc))
+        if 'ROC_AUC' in metrics.keys():
+            avg_roc_auc = metrics['ROC_AUC']
+            tqdm.write('Average ROC_AUC ' + str(avg_roc_auc))
 
+    
+    state = trainer.run(train_loader, max_epochs=1)
+    pbar.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Pytorch Ignite - idist")
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--nproc_per_node", type=int)
-    parser.add_argument("--log_interval", type=int, default=4)
+    parser.add_argument("--log_interval", type=int, default=1)
     parser.add_argument("--nb_samples", type=int, default=128)
     parser.add_argument("--nnodes", type=int)
     parser.add_argument("--node_rank", type=int)
@@ -208,7 +258,7 @@ if __name__ == "__main__":
                         help='number of GNN message passing layers (default: 5)')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='dimensionality of hidden units in GNNs (default: 300)')
-    parser.add_argument('--batch_size', type=int, default=32,
+    parser.add_argument('--batch_size', type=int, default=16,
                         help='input batch size for training (default: 32)')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 100)')
@@ -237,9 +287,21 @@ if __name__ == "__main__":
         "num_layer": args_parsed.num_layer,
         "emb_dim": args_parsed.emb_dim,
         "drop_ratio": args_parsed.drop_ratio
-        
     }
 
+    # Dataloader Prepare
+    dataset = PygGraphPropPredDataset(name=config['dataset'])
+    
+    '''
+    split_idx = dataset.get_idx_split()
+    # print()
+    train_loader = idist.auto_dataloader(dataset[split_idx['train']], batch_size=config['batch_size'],shuffle=True, collate_fn=Collater(False, []))
+    valid_loader = idist.auto_dataloader(dataset[split_idx['valid']], batch_size=config['batch_size'],shuffle=True, collate_fn=Collater(False, []))
+    test_loader = idist.auto_dataloader(dataset[split_idx['test']], batch_size=config['batch_size'],shuffle=True, collate_fn=Collater(False, []))
+    print(len(split_idx['train']))
+    '''
+
+    # Process spwan config # 
     spawn_kwargs = dict()
     spawn_kwargs["nproc_per_node"] = args_parsed.nproc_per_node
     spawn_kwargs["nnodes"] = args_parsed.nnodes
@@ -248,5 +310,10 @@ if __name__ == "__main__":
     spawn_kwargs["master_port"] = args_parsed.master_port
 
     # Specific ignite.distributed
+    start = time()
     with idist.Parallel(backend=args_parsed.backend, **spawn_kwargs) as parallel:
         parallel.run(training, config)
+        # parallel.run(evaluation, test_loader, config)
+
+    end = time()
+    print('training time: ' + str(end-start))
