@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 
 from gnn_dgl import GNN
+import time
 
 reg_criterion = torch.nn.L1Loss()
 
@@ -102,17 +103,17 @@ def main():
                              '[gin, gin-virtual, gcn, gcn-virtual] (default: gin-virtual)')
     parser.add_argument('--graph_pooling', type=str, default='sum',
                         help='graph pooling strategy mean or sum (default: sum)')
-    parser.add_argument('--drop_ratio', type=float, default=0,
+    parser.add_argument('--drop_ratio', type=float, default=0.5,
                         help='dropout ratio (default: 0)')
     parser.add_argument('--num_layers', type=int, default=5,
                         help='number of GNN message passing layers (default: 5)')
-    parser.add_argument('--emb_dim', type=int, default=600,
+    parser.add_argument('--emb_dim', type=int, default=300,
                         help='dimensionality of hidden units in GNNs (default: 600)')
     parser.add_argument('--train_subset', action='store_true',
                         help='use 10% of the training set for training')
-    parser.add_argument('--batch_size', type=int, default=256,
+    parser.add_argument('--batch_size', type=int, default=32,
                         help='input batch size for training (default: 256)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=40,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='number of workers (default: 0)')
@@ -127,9 +128,9 @@ def main():
 
     print(args)
 
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
+    # np.random.seed(args.seed)
+    # torch.manual_seed(args.seed)
+    # random.seed(args.seed)
 
     device = torch.device("cpu")
 
@@ -195,13 +196,14 @@ def main():
         # args.epochs = 1000
     else:
         scheduler = StepLR(optimizer, step_size=30, gamma=0.25)
-
+    duration = 0
     # print(args.epochs)
     for epoch in range(1, args.epochs+1):
         print("=====Epoch {}".format(epoch))
         print('Training...')
+        start = time.time()
         train_mae = train(model, device, train_loader, optimizer)
-
+        end = time.time()
         # print('Evaluating...')
         # valid_mae = eval(model, device, valid_loader, evaluator)
 
@@ -229,7 +231,8 @@ def main():
                 evaluator.save_test_submission({'y_pred': y_pred}, args.save_test_dir)
         '''
         scheduler.step()
-
+        duration += end - start
+    print(duration)
         # print(f'Best validation MAE so far: {best_valid_mae}')
     print('Testing')
     roc_auc = eval(model, device, test_loader, evaluator)

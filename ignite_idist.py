@@ -8,6 +8,7 @@ from torch.nn import NLLLoss
 from torch.optim import SGD
 from torch.utils.data import Dataset
 from torchvision.models import wide_resnet50_2
+import time
 
 
 class RndDataset(Dataset):
@@ -64,15 +65,28 @@ def training(rank, config):
         target = batch[1].to(device)
 
         optimizer.zero_grad()
+        forward_start = time.time()
         output = model(data)
+        forward_end = time.time()
+        forward_time = forward_end-forward_start
+        print("forward_time: " + str(forward_end-forward_start))
         # Add a softmax layer
         probabilities = torch.nn.functional.softmax(output, dim=0)
 
         loss_val = criterion(probabilities, target)
+        backward_start = time.time()
         loss_val.backward()
-        optimizer.step()
+        backward_end = time.time()
+        backward_time = backward_end - backward_start
+        print("backward_time: " + str(backward_end-backward_start))
 
-        return loss_val
+        opt_step_start = time.time()
+        optimizer.step()
+        opt_step_end = time.time()
+        opt_step_time = opt_step_end - opt_step_start
+        print("opt_step_time: " + str(opt_step_end-opt_step_start))
+
+        return forward_time, backward_time, opt_step_time, loss_val
 
     # Running the _train_step function on whole batch_data iterable only once
     trainer = Engine(_train_step)
@@ -91,14 +105,14 @@ def training(rank, config):
             )
         )
 
-    trainer.run(train_loader, max_epochs=1)
+    trainer.run(train_loader, max_epochs=20)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Pytorch Ignite - idist")
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--nproc_per_node", type=int)
-    parser.add_argument("--log_interval", type=int, default=4)
+    parser.add_argument("--log_interval", type=int, default=1)
     parser.add_argument("--nb_samples", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--nnodes", type=int)
@@ -123,5 +137,8 @@ if __name__ == "__main__":
     spawn_kwargs["master_port"] = args_parsed.master_port
 
     # Specific ignite.distributed
+    start = time.time()
     with idist.Parallel(backend=args_parsed.backend, **spawn_kwargs) as parallel:
         parallel.run(training, config)
+    end = time.time()
+    print(end - start)

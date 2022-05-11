@@ -3,6 +3,7 @@ from torch_geometric.nn import MessagePassing
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool, global_add_pool
 from ogb.graphproppred.mol_encoder import AtomEncoder,BondEncoder
+# import ogb.graphproppred.mol_encoder as mol_encoder
 from torch_geometric.utils import degree
 
 import math
@@ -74,6 +75,7 @@ class GNN_node(torch.nn.Module):
         '''
             emb_dim (int): node embedding dimensionality
             num_layer (int): number of GNN message passing layers
+
         '''
 
         super(GNN_node, self).__init__()

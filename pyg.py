@@ -10,7 +10,8 @@ import time
 import numpy as np
 
 ### importing OGB
-from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
+from ogb.graphproppred import PygGraphPropPredDataset
+from ogb.graphproppred.evaluate import Evaluator
 
 cls_criterion = torch.nn.BCEWithLogitsLoss()
 reg_criterion = torch.nn.MSELoss()
@@ -75,7 +76,7 @@ def main():
                         help='dimensionality of hidden units in GNNs (default: 300)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='input batch size for training (default: 32)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=40,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='number of workers (default: 0)')
@@ -88,7 +89,6 @@ def main():
                         help='filename to output result (default: )')
     args = parser.parse_args()
 
-    print("Start")
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
 
     ### automatic dataloading and splitting
@@ -122,23 +122,24 @@ def main():
     else:
         raise ValueError('Invalid GNN type')
 
+    print(args.gnn)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    # valid_curve = []
+    valid_curve = []
     test_curve = []
     train_curve = []
 
-    start = time.time()
+    duration = 0.0
     for epoch in range(1, args.epochs + 1):
+        start = time.time()
         print("=====Epoch {}".format(epoch))
         print('Training...')
         train(model, device, train_loader, optimizer, dataset.task_type)
+        end = time.time()
 
-        '''
         print('Evaluating...')
-        train_perf = eval(model, device, train_loader, evaluator)
-        valid_perf = eval(model, device, valid_loader, evaluator)
-        '''
+        # train_perf = eval(model, device, train_loader, evaluator)
+        # valid_perf = eval(model, device, valid_loader, evaluator)
         test_perf = eval(model, device, test_loader, evaluator)
 
         # print({'Train': train_perf, 'Validation': valid_perf, 'Test': test_perf})
@@ -146,9 +147,8 @@ def main():
         # train_curve.append(train_perf[dataset.eval_metric])
         # valid_curve.append(valid_perf[dataset.eval_metric])
         test_curve.append(test_perf[dataset.eval_metric])
+        duration += end - start
 
-    end = time.time()
-    
     # if 'classification' in dataset.task_type:
     #     best_val_epoch = np.argmax(np.array(valid_curve))
     #     best_train = max(train_curve)
@@ -156,14 +156,15 @@ def main():
     #     best_val_epoch = np.argmin(np.array(valid_curve))
     #     best_train = min(train_curve)
 
-    print('Training Time: ' + str(end-start))
-    # print('Finished training!')
-    #print('Best validation score: {}'.format(valid_curve[best_val_epoch]))
-    print('Test score: {}'.format(max(test_curve)))
+    print('Finished training!')
+    # print('Best validation score: {}'.format(valid_curve[best_val_epoch]))
+    # print('Test score: {}'.format(test_curve[best_val_epoch]))
 
     # if not args.filename == '':
     #     torch.save({'Val': valid_curve[best_val_epoch], 'Test': test_curve[best_val_epoch], 'Train': train_curve[best_val_epoch], 'BestTrain': best_train}, args.filename)
-
+    print(train_curve)
+    print(test_curve)
+    print(duration)
 
 if __name__ == "__main__":
     main()

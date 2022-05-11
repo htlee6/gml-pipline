@@ -14,12 +14,11 @@ from torch.optim import SGD, Adam
 from ignite.utils import setup_logger
 from torch.utils.data import Dataset
 import torch.nn.functional as F
+import time
 
 # rom torch_geometric.datasets import Planetoid
 import ogb
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
-
-from time import time
 
 from tqdm import tqdm
 
@@ -118,7 +117,7 @@ def training(rank, config):
     # print("Preparing Model")
     model = idist.auto_model(model)
     # print("Preparing Opt")
-    optimizer = idist.auto_optim(Adam(model.parameters(), lr=0.01))
+    optimizer = idist.auto_optim(Adam(model.parameters(), lr=0.001))
     if dataset.task_type == 'classification':
         criterion = torch.nn.BCEWithLogitsLoss()
     else:
@@ -147,23 +146,32 @@ def training(rank, config):
         return loss_val
     '''
 
-    def _train(engine, foo):
+    def _train(engine, batch):
         model.train()
-        for step, batch in enumerate(train_loader):
-            # if step % 3 == 0:
-            #     print("current step " + str(step))
-            batch = batch.to(device)
+        batch = batch.to(device)
 
-            if batch.x.shape[0] == 1 or batch.batch[-1] == 0:
-                pass
-            else:
-                pred = model(batch)
-                optimizer.zero_grad()
-                ## ignore nan targets (unlabeled) when computing training loss.
-                is_labeled = batch.y == batch.y
-                loss = criterion(pred.to(torch.float32)[is_labeled], batch.y.to(torch.float32)[is_labeled])
-                loss.backward()
-                optimizer.step()
+        if batch.x.shape[0] == 1 or batch.batch[-1] == 0:
+            pass
+        else:
+            forward_start = time.time()
+            pred = model(batch)
+            forward_end = time.time()
+            forward_t = forward_end - forward_start
+            optimizer.zero_grad()
+            ## ignore nan targets (unlabeled) when computing training loss.
+            is_labeled = batch.y == batch.y
+            loss = criterion(pred.to(torch.float32)[is_labeled], batch.y.to(torch.float32)[is_labeled])
+            
+            backward_start = time.time()
+            loss.backward()
+            backward_end = time.time()
+            backward_t = backward_end - backward_start
+
+            optim_start =  time.time()
+            optimizer.step()
+            optim_end = time.time()
+            optim_t = optim_end - optim_start
+            # print(forward_t, backward_t, optim_t)
     
     # torch.no_grad()
     # return_dict = {"y_pred": model(dataset[split_idx['test']]), "y": dataset[split_idx['test']].y}
@@ -258,9 +266,9 @@ if __name__ == "__main__":
                         help='number of GNN message passing layers (default: 5)')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='dimensionality of hidden units in GNNs (default: 300)')
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=32,
                         help='input batch size for training (default: 32)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=5,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='number of workers (default: 0)')
@@ -310,10 +318,9 @@ if __name__ == "__main__":
     spawn_kwargs["master_port"] = args_parsed.master_port
 
     # Specific ignite.distributed
-    start = time()
+    start = time.time()
     with idist.Parallel(backend=args_parsed.backend, **spawn_kwargs) as parallel:
         parallel.run(training, config)
         # parallel.run(evaluation, test_loader, config)
-
-    end = time()
-    print('training time: ' + str(end-start))
+    end = time.time()
+    print("time: " + str(end-start))
