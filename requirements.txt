@@ -1,6 +1,5 @@
 numpy
 matplotlib
-torch == 1.10.* --extra-index-url https://download.pytorch.org/whl/cpu
 rdkit-pypi
 torch-scatter -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
 torch-sparse -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
@@ -9,3 +8,5 @@ torch-spline-conv -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
 torch-geometric -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
 ogb
 pytorch-ignite
+dgl -f https://data.dgl.ai/wheels/repo.html
+dglgo -f https://data.dgl.ai/wheels/repo.html
