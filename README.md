@@ -1,4 +1,4 @@
-# gml-pipline
+# Performance Analysis of Prediction on Molecular Graphs with Graph Neural Networks
 
 ## Install Python Packages
 
